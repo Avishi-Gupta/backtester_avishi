@@ -9,8 +9,40 @@ Writes markdown tables to reports/results.md and PNGs to reports/.
 
 from __future__ import annotations
 
-import argparse
+import sys
 from pathlib import Path
+
+# Make `python scripts/foo.py` work from any working directory without needing
+# an editable install: put the repo root on sys.path before importing the
+# package. `pip install -e .` also works and is preferred for real use.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+
+def _require(module: str, extra: str = "") -> None:
+    """Fail with the command to run, not a bare ModuleNotFoundError."""
+    import importlib
+
+    try:
+        importlib.import_module(module)
+    except ModuleNotFoundError:
+        root = Path(__file__).resolve().parent.parent
+        sys.exit(
+            f"\nMissing dependency: {module}\n\n"
+            f"Install the project's requirements with the SAME interpreter that runs\n"
+            f"this script:\n\n"
+            f"    cd {root}\n"
+            f"    python3 -m pip install -e .{extra}\n\n"
+            f"(Using `python3 -m pip` rather than a bare `pip` matters: a bare `pip`\n"
+            f"often belongs to a different environment than `python3`, which is how\n"
+            f"a package installs successfully and still imports as missing.)\n"
+        )
+
+
+import argparse
+
+_require("polars")
+_require("matplotlib")
 
 import polars as pl
 
