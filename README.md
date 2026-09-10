@@ -126,7 +126,7 @@ recorded choice, not a silent one.
 
 ## The five tests that carry the credibility
 
-Run: `pytest -q` → **41 passed in ~2s**, no network required.
+Run: `pytest -q` → **46 passed in ~2s**, no network required.
 
 | # | test | what it proves |
 |---|---|---|
@@ -281,6 +281,66 @@ Written out in full at the top of `data.py`. The short version:
 
 ---
 
+## Using real data
+
+The synthetic fixture exists so tests and CI run offline. For anything you would
+show someone, point the same scripts at real bars.
+
+```bash
+pip install yfinance
+python scripts/fetch_data.py --tickers AAPL MSFT XOM JPM BAC KO SPY --start 2005-01-01
+python scripts/run_report.py --bars data_cache/bars.parquet
+```
+
+`fetch_data.py` downloads once and writes `data_cache/bars.parquet`. Everything
+downstream reads that cache, so a backtest never touches the network and a
+result is reproducible from a file you can inspect. Re-run the fetch only when
+you deliberately want fresh data — and expect your numbers to move, for the
+restatement reason below.
+
+**Any panel works, not just yfinance.** The engine only needs a long Polars
+frame with `date, ticker, open, high, low, close, adj_close, volume`. A CSV from
+anywhere becomes a valid input in four lines:
+
+```python
+import polars as pl
+from backtester import data
+
+bars = pl.read_csv("my_bars.csv", try_parse_dates=True)
+data.validate_bars(bars)          # rejects dupes, gaps in ordering, high < low
+panel = data.align(bars)          # union calendar; missing bar = untradable
+```
+
+`validate_bars` runs on every path in and rejects duplicate `(ticker, date)`
+rows, non-monotonic dates, `high < low` and non-positive closes — each of which
+corrupts a backtest silently rather than crashing it.
+
+### Three things that change when the data is real
+
+**Pick the ticker list before you look at returns.** The harness cannot save you
+from survivorship bias: if the names come from today's index membership, you
+have selected on having survived, and every result is flattered. Write down why
+each ticker is in the list, in the README, before running anything.
+
+**Adjusted history gets restated.** yfinance returns split- and
+dividend-adjusted prices, and those are recomputed whenever a new corporate
+action lands, so today's 2015 adjusted close is not a number anyone could have
+traded in 2015. The harness trades raw OHLC (`auto_adjust=False`) and keeps
+`adj_close` beside it for total-return work only. This is documented, not
+solved — a real fix needs vendor snapshots with an as-of date.
+
+**Real calendars have holes.** Different tickers halt, list late and delist. The
+default `missing="null"` treats an absent bar as untradable (position carried,
+nothing accrued, nothing charged) rather than as a flat riskless day. If you
+switch to `missing="ffill"`, you are asserting the price did not move — say so
+in the writeup.
+
+Then re-run the audit on your own signals against the real panel. Leaks that
+hide in smooth synthetic data surface fast on real prices, where corporate
+actions and gaps give a peeking feature much more to grab onto.
+
+---
+
 ## Layout
 
 ```
@@ -299,7 +359,7 @@ scripts/
   fetch_data.py   yfinance -> parquet cache (run once)
   run_report.py   full report -> reports/
   benchmark.py    polars vs pandas, with a correctness check
-tests/            41 tests, no network
+tests/            46 tests, no network
 ```
 
 ## Quickstart
@@ -307,7 +367,7 @@ tests/            41 tests, no network
 ```bash
 pip install polars pandas numpy pyarrow matplotlib pytest yfinance
 
-pytest -q                                    # 41 tests, offline, ~2s
+pytest -q                                    # 46 tests, offline, ~2s
 python scripts/run_report.py                 # synthetic fixture
 python scripts/fetch_data.py --tickers AAPL MSFT XOM JPM BAC KO SPY --start 2005-01-01
 python scripts/run_report.py --bars data_cache/bars.parquet
