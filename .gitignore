@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+.venv/
+venv/
+
+# Downloaded bars are a cache, not source. Regenerate with scripts/fetch_data.py.
+data_cache/
+
+# Generated report output is kept, so the README's figures resolve on GitHub.
+# reports/
