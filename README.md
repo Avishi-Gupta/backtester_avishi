@@ -155,48 +155,72 @@ is worth running on anything that looks too good.
 
 ## Results
 
-Numbers below are from the deterministic synthetic fixture
-(`data.synthetic_panel`, seed 7 — GARCH-style vol clustering plus a crash), so
-they reproduce byte-for-byte on any machine. Point the same scripts at real bars
-with `--bars data_cache/bars.parquet`. Full tables: [`reports/results.md`](reports/results.md).
+**Real data.** 7 US large caps plus SPY (AAPL, MSFT, XOM, JPM, BAC, KO, SPY),
+daily bars 2005-01-03 to 2026-09-10, 5,456 days. Costs 1.5bp all-in, risk-free
+rate assumed 0.0. Reproduce with the two commands under *Using real data*. The
+deterministic synthetic fixture is still what the tests run on, so `pytest`
+needs no network.
 
-Costs 1.5bp all-in; risk-free rate assumed 0.0; 4 tickers × 3,000 bars.
-
-**Walk-forward, out-of-sample only** (750-bar rolling train, 125-bar test, 18 folds):
+**Walk-forward, out-of-sample only** (750-bar rolling train, 125-bar test, 37 folds):
 
 | strategy | OOS Sharpe | gross | CAGR | max DD | turnover |
 |---|---|---|---|---|---|
-| buy_and_hold | 0.31 | 0.31 | 3.1% | −67.7% | 0.000 |
-| momentum | 1.10 | 1.13 | 11.9% | −31.9% | 0.072 |
-| mean_reversion | −1.08 | −0.97 | −8.1% | −56.1% | 0.117 |
-| vol_filtered_momentum | **1.30** | 1.34 | 12.5% | −24.8% | 0.073 |
+| **buy_and_hold** | **0.61** | 0.61 | 11.9% | −58.4% | 0.000 |
+| mean_reversion | 0.25 | 0.31 | 2.4% | −34.2% | 0.158 |
+| vol_filtered_momentum | 0.24 | 0.27 | 2.0% | −26.3% | 0.082 |
+| momentum | −0.04 | −0.01 | −1.9% | −47.0% | 0.086 |
 
-The per-fold spread for the best strategy runs from **+7.5 to −2.5**. That
-spread is the honest description of the result; the headline 1.30 is a summary
-of it, not a substitute.
+**None of the signals beat buy-and-hold.** That is the result, and it is
+reported as the result. Over a 21-year sample dominated by an equity bull
+market, a long-only benchmark with zero turnover earned 0.61 while a
+cross-sectional momentum rule earned less than nothing. The two signals that
+are positive are positive by a margin that a 37-fold spread does not support.
+
+The honest reading is narrower still: on this universe and this period, the
+harness says *there is no edge here* — and a backtester whose value depends on
+finding one would have been tuned until it did. What the tool demonstrates is
+that it can tell the difference. The synthetic fixture, where a genuine
+momentum effect was built into the data generator, scores 1.30 on the same
+code path.
+
+Note the drawdowns. Buy-and-hold's −58% is 2008 arriving in full; the
+vol-filtered signal cuts that to −26% while giving up most of the return, which
+is the trade the `exposure` and `turnover` columns exist to make visible.
 
 ![equity](reports/equity.png)
 
-**Cost sensitivity** — the table worth having on hand:
+**Cost sensitivity** — net Sharpe as all-in cost rises:
 
-| all-in bps | 0 | 1 | 2 | 5 | 10 | 20 |
-|---|---|---|---|---|---|---|
-| `momentum` net Sharpe | 1.15 | 1.13 | 1.11 | 1.04 | 0.93 | 0.71 |
-| `mean_reversion` net Sharpe | −1.03 | −1.10 | −1.18 | −1.39 | −1.75 | −2.47 |
-| `vol_filtered_momentum` net Sharpe | 1.40 | 1.38 | 1.35 | 1.28 | 1.16 | 0.91 |
+| all-in bps | 0 | 1 | 2 | 5 | 10 | 20 | break-even |
+|---|---|---|---|---|---|---|---|
+| `mean_reversion` | 0.27 | 0.23 | 0.19 | 0.06 | −0.16 | −0.59 | **6.3 bps** |
+| `vol_filtered_momentum` | 0.25 | 0.23 | 0.20 | 0.13 | 0.01 | −0.23 | **10.4 bps** |
+| `momentum` | −0.00 | −0.02 | −0.04 | −0.09 | −0.17 | −0.34 | never positive |
 
-At turnover ≈0.07 these strategies are cheap to run; the cost drag at 20bp is
-only about 3.5% a year. That is a property of the *turnover*, not of the Sharpe,
-which is exactly why turnover sits next to Sharpe in every table. A signal with
-turnover 1.0 would have been dead by 5bp — as `Oracle` is
-(`test_perfect_foresight_is_destroyed_by_realistic_costs`).
+Mean reversion dies at 6.3bp. Its gross Sharpe of 0.27 is the more flattering
+number and it is 39% higher than the net figure, entirely because turnover is
+0.156 — nearly twice the vol-filtered signal's. Two strategies with almost
+identical gross Sharpe, and one of them is half as viable. That is the whole
+argument for reporting turnover next to Sharpe rather than underneath it.
 
 ![cost sensitivity](reports/cost_sensitivity.png)
 
-**Refit-cadence sensitivity** — OOS Sharpe for `vol_filtered_momentum` at
-21/63/125/252-bar refit intervals: 1.29 / 1.39 / 1.30 / 1.82. Broadly flat, with
-the 252-bar figure resting on only 8 folds. Flat is the good news you want here;
-a result that only survives at one cadence is a coincidence.
+**Refit-cadence sensitivity** — OOS Sharpe at 21/63/125/252-bar refit intervals:
+0.65 / 0.62 / 0.61 / 0.61. Flat, which is the good news you want; the result
+does not depend on a cadence nobody thought of as a parameter.
+
+**The leak detector on real data.** `peek_ahead_momentum` — momentum computed
+with a window that includes tomorrow's close — scores **5.52** at zero extra
+latency and **−0.48** with one extra bar. Gross to net barely moves it; one bar
+of honest delay annihilates it. Every genuine signal in the table above is flat
+in that same column.
+
+| extra bars of delay | 0 | 1 | 2 | 3 | 5 |
+|---|---|---|---|---|---|
+| `peek_ahead_momentum` (leaking) | **5.52** | −0.48 | −0.37 | −0.30 | −0.25 |
+| `momentum` (honest) | −0.03 | 0.03 | 0.01 | 0.01 | 0.09 |
+
+Full tables, including per-fold detail: [`reports/results.md`](reports/results.md).
 
 ---
 
@@ -287,10 +311,18 @@ The synthetic fixture exists so tests and CI run offline. For anything you would
 show someone, point the same scripts at real bars.
 
 ```bash
-pip install yfinance
-python scripts/fetch_data.py --tickers AAPL MSFT XOM JPM BAC KO SPY --start 2005-01-01
-python scripts/run_report.py --bars data_cache/bars.parquet
+python3 -m pip install -e ".[data]"
+python3 scripts/fetch_data.py --tickers AAPL MSFT XOM JPM BAC KO SPY --start 2005-01-01
+python3 scripts/run_report.py --bars data_cache/bars.parquet
 ```
+
+Use `python3 -m pip`, not a bare `pip`. A bare `pip` frequently belongs to a
+different environment than the `python3` that then runs the script, which is how
+a package installs successfully and still imports as missing. The scripts check
+their own dependencies on startup and print this command rather than a bare
+`ModuleNotFoundError`. They also add the repo root to `sys.path` themselves, so
+`python3 scripts/...` works from any directory even without the editable
+install.
 
 `fetch_data.py` downloads once and writes `data_cache/bars.parquet`. Everything
 downstream reads that cache, so a backtest never touches the network and a
@@ -365,7 +397,8 @@ tests/            46 tests, no network
 ## Quickstart
 
 ```bash
-pip install polars pandas numpy pyarrow matplotlib pytest yfinance
+cd backtester
+python3 -m pip install -e ".[data,dev]"      # deps come from pyproject.toml
 
 pytest -q                                    # 46 tests, offline, ~2s
 python scripts/run_report.py                 # synthetic fixture
