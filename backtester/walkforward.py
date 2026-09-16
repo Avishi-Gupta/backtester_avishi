@@ -1,15 +1,11 @@
 """Rolling train/test evaluation.
 
-A single train/test split is fine exactly once. The moment you look at the test
-score and change something, the test set has become a training set, and after a
-dozen such rounds your "out-of-sample" Sharpe is a measure of how many times
-you re-ran the notebook.
+Each fold is scored on data the signal had not seen when it was fit, and the
+reported result is the concatenation of out-of-sample segments only. The
+in-sample curve is not returned.
 
-Walk-forward does not solve that (nothing does, short of a locked-away holdout
-and a pre-registered hypothesis), but it makes it much more expensive to fool
-yourself: every fold is scored on data the model had not seen when it was fit,
-and the result you quote is the concatenation of those out-of-sample segments
-and nothing else. The in-sample curve is not a result and is not returned.
+This limits, but does not remove, overfitting from repeated runs against the
+same test data.
 """
 
 from __future__ import annotations
@@ -39,7 +35,7 @@ class Fold:
 
 @dataclass
 class WalkForwardResult:
-    portfolio: pl.DataFrame   # concatenated OUT-OF-SAMPLE bars only
+    portfolio: pl.DataFrame   # concatenated out-of-sample bars only
     metrics: Metrics          # computed on that concatenation
     folds: list[Fold]
     config: dict[str, Any]
@@ -81,13 +77,12 @@ def walk_forward(
 ) -> WalkForwardResult:
     """Fit, evaluate forward, slide, repeat.
 
-    ``signal_factory`` is a callable returning a FRESH signal, not a signal
-    instance. A single instance carried across folds would keep whatever state
-    it learned in fold 1 when it is scored on fold 2, which is leakage wearing a
-    different hat.
+    ``signal_factory`` is a callable returning a new signal instance, not a
+    signal. Reusing one instance would carry state fitted in one fold into the
+    next fold's evaluation.
 
-    ``test_bars`` doubles as the refit interval. Vary it and report the spread:
-    if the result only survives at one refit cadence, it is a coincidence.
+    ``test_bars`` is also the refit interval. ``refit_sensitivity`` varies it to
+    check the result does not depend on a particular cadence.
     """
     dates = bars["date"].unique().sort()
     n = dates.len()
@@ -106,9 +101,9 @@ def walk_forward(
         train_start = 0 if mode == "expanding" else max(0, test_start - train_bars)
 
         train_dates = dates[train_start:test_start]
-        # The signal is fit on the training window only. It is then RUN over
-        # history up to test_end, because it needs warmup bars to produce a
-        # position on the first test day -- but only the test rows are kept.
+        # Fit on the training window only, then run over history up to
+        # test_end so warmup bars are available for the first test day. Only
+        # the test rows are kept.
         train_panel = bars.filter(pl.col("date").is_in(train_dates.implode()))
         run_dates = dates[:test_end]
         run_panel = bars.filter(pl.col("date").is_in(run_dates.implode()))
@@ -188,8 +183,7 @@ def refit_sensitivity(
 ) -> pl.DataFrame:
     """Out-of-sample Sharpe as a function of refit cadence.
 
-    Flat is good news: the result does not depend on a lucky choice of
-    hyper-parameter you never thought of as one.
+    A flat profile indicates the result does not depend on the refit interval.
     """
     rows = []
     for tb in test_bars_grid:

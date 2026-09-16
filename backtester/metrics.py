@@ -1,8 +1,7 @@
-"""Performance metrics, computed from the NET equity curve.
+"""Performance metrics, computed from the net equity curve.
 
-Reported together, always. A single number invites cherry-picking; a Sharpe
-without a turnover figure beside it is an unanswered question about whether the
-costs were real.
+``summarise`` returns all metrics together. Sharpe without turnover beside it
+does not indicate whether the costs charged were realistic.
 """
 
 from __future__ import annotations
@@ -39,10 +38,9 @@ class Metrics:
 def sharpe(returns: np.ndarray, periods_per_year: int = TRADING_DAYS, rf: float = 0.0) -> float:
     """Annualised Sharpe of an excess-return series.
 
-    RISK-FREE ASSUMPTION: ``rf`` is the per-period risk-free rate and defaults
-    to 0.0. That is a real assumption, not a neutral one -- in a 5% rates
-    regime a long-only equity strategy's Sharpe is overstated by roughly
-    0.05/vol. State it whenever you quote the number.
+    ``rf`` is the per-period risk-free rate and defaults to 0.0. This is an
+    assumption, not a neutral choice: at 5% rates a long-only equity strategy's
+    Sharpe is overstated by roughly 0.05/vol.
     """
     r = np.asarray(returns, dtype=float)
     r = r[np.isfinite(r)]
@@ -50,9 +48,8 @@ def sharpe(returns: np.ndarray, periods_per_year: int = TRADING_DAYS, rf: float 
         return float("nan")
     excess = r - rf
     sd = excess.std(ddof=1)
-    # Floating point makes std() of a constant series tiny-but-nonzero, which
-    # would report a Sharpe of 1e16. A constant series has no risk-adjusted
-    # information; call it zero.
+    # std() of a constant series is tiny but non-zero in floating point, which
+    # would give a Sharpe around 1e16. Treat it as zero.
     if not np.isfinite(sd) or sd <= 1e-15 * max(1.0, abs(excess.mean())):
         return 0.0
     return float(excess.mean() / sd * np.sqrt(periods_per_year))
@@ -81,7 +78,7 @@ def equity_curve(returns: np.ndarray) -> np.ndarray:
 
 
 def max_drawdown(equity: np.ndarray) -> float:
-    """Worst peak-to-trough fraction. Returned as a negative number."""
+    """Largest peak-to-trough decline, returned as a negative fraction."""
     eq = np.asarray(equity, dtype=float)
     if eq.size == 0:
         return float("nan")
@@ -97,9 +94,9 @@ def drawdown_series(equity: np.ndarray) -> np.ndarray:
 def hit_rate(returns: np.ndarray) -> float:
     """Fraction of periods with a positive return.
 
-    Nearly meaningless in isolation: a strategy that wins 95% of days and loses
-    everything on the other 5% has a wonderful hit rate and no future. Quote it
-    only next to Sharpe and max drawdown.
+    Uninformative in isolation: a strategy that wins 95% of days and loses
+    heavily on the rest has a high hit rate. Read alongside Sharpe and max
+    drawdown.
     """
     r = np.asarray(returns, dtype=float)
     r = r[np.isfinite(r)]
@@ -111,8 +108,7 @@ def hit_rate(returns: np.ndarray) -> float:
 def turnover(positions: np.ndarray) -> float:
     """Mean absolute position change per period.
 
-    The number that tells you in advance whether costs will eat the signal:
-    annualised cost drag is roughly ``turnover * 252 * all_in_bps``.
+    Annualised cost drag is approximately ``turnover * 252 * all_in_bps``.
     """
     p = np.nan_to_num(np.asarray(positions, dtype=float))
     if p.size == 0:
@@ -136,7 +132,7 @@ def summarise(
     periods_per_year: int = TRADING_DAYS,
     rf: float = 0.0,
 ) -> Metrics:
-    """Everything at once, from the net curve."""
+    """All metrics, computed from the net return series."""
     net = np.nan_to_num(np.asarray(net_returns, dtype=float))
     gross = np.nan_to_num(np.asarray(gross_returns, dtype=float))
     pos = np.nan_to_num(np.asarray(positions, dtype=float))
@@ -174,7 +170,7 @@ def summarise(
 
 
 def metrics_table(named: dict[str, Metrics]) -> pl.DataFrame:
-    """Stack several Metrics into one comparison table."""
+    """Combine several Metrics into one comparison table."""
     rows = []
     for name, m in named.items():
         d = {"strategy": name}

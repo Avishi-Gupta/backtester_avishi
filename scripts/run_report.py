@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _require(module: str, extra: str = "") -> None:
-    """Fail with the command to run, not a bare ModuleNotFoundError."""
+    """Exit with the install command instead of a bare ModuleNotFoundError."""
     import importlib
 
     try:
@@ -29,13 +29,11 @@ def _require(module: str, extra: str = "") -> None:
         root = Path(__file__).resolve().parent.parent
         sys.exit(
             f"\nMissing dependency: {module}\n\n"
-            f"Install the project's requirements with the SAME interpreter that runs\n"
-            f"this script:\n\n"
+            f"Install with the same interpreter that runs this script:\n\n"
             f"    cd {root}\n"
             f"    python3 -m pip install -e .{extra}\n\n"
-            f"(Using `python3 -m pip` rather than a bare `pip` matters: a bare `pip`\n"
-            f"often belongs to a different environment than `python3`, which is how\n"
-            f"a package installs successfully and still imports as missing.)\n"
+            f"`python3 -m pip` is used rather than a bare `pip` because the two can\n"
+            f"resolve to different environments.\n"
         )
 
 
@@ -214,7 +212,7 @@ def main() -> None:
 
 
 def _as_result(wf):
-    """Adapt a WalkForwardResult to the shape the plotting helper expects."""
+    """Adapt a WalkForwardResult to the interface the plotting helper uses."""
     from backtester.engine import BacktestResult
 
     return BacktestResult(panel=wf.portfolio, portfolio=wf.portfolio,

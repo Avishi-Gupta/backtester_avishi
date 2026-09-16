@@ -1,14 +1,13 @@
-"""Reporting: summary tables, equity/drawdown figures, sensitivity grids.
+"""Summary tables, figures and sensitivity grids.
 
-Chart conventions used throughout (they are deliberate, not defaults):
+Chart conventions:
 
-* One y-axis per panel. Equity and drawdown are different scales, so they are
-  two stacked panels sharing an x-axis, never a twin-axis chart.
-* Net is the headline series and gets the strongest colour; gross is drawn
-  thinner and lighter, because gross is context, not a result.
-* Every series is named in the legend AND direct-labelled at its right edge, so
-  identity never depends on colour alone.
-* Grid and axes are recessive; no chart junk, no number on every point.
+* One y-axis per panel. Equity and drawdown are plotted as two stacked panels
+  sharing an x-axis rather than on twin axes.
+* Net is the primary series; gross is drawn thinner and lighter.
+* Series are named in the legend and direct-labelled at the right edge, so
+  identity does not depend on colour alone.
+* Recessive grid and axes; no value labels on individual points.
 """
 
 from __future__ import annotations
@@ -23,9 +22,9 @@ from backtester.costs import CostModel
 from backtester.engine import BacktestResult, run_backtest
 from backtester.metrics import Metrics, metrics_table
 
-# Palette: slots 1, 2 and 8 of the validated categorical set, plus text tokens.
-NET = "#2a78d6"      # blue   - the headline series
-GROSS = "#eb6834"    # orange - context
+# Colours chosen for separability under common colour-vision deficiencies.
+NET = "#2a78d6"      # blue   - net series
+GROSS = "#eb6834"    # orange - gross series
 LOSS = "#e34948"     # red    - drawdown
 INK = "#0b0b0b"
 INK_2 = "#52514e"
@@ -50,11 +49,10 @@ def _style(ax) -> None:
 
 
 def summary_table(results: dict[str, BacktestResult]) -> pl.DataFrame:
-    """One row per strategy, the metrics that matter, in a fixed order.
+    """One row per strategy, in a fixed column order.
 
-    Sharpe is not first. Net and gross Sharpe sit next to turnover on purpose,
-    so that "great Sharpe, 1.4 turnover" is visible in one glance as the cost
-    problem it is.
+    Net and gross Sharpe are placed next to turnover so a high Sharpe with high
+    turnover is visible as a cost problem.
     """
     tbl = metrics_table({k: v.metrics for k, v in results.items()})
     cols = [
@@ -72,11 +70,7 @@ def cost_sensitivity(
     all_in_bps: Sequence[float] = (0.0, 1.0, 2.0, 5.0, 10.0, 20.0),
     **kwargs: Any,
 ) -> pl.DataFrame:
-    """Sharpe as a function of all-in transaction cost.
-
-    The table to have on hand in an interview: it answers "at what cost level
-    does this stop working?" before anyone has to ask.
-    """
+    """Sharpe as a function of all-in transaction cost."""
     rows = []
     for bps in all_in_bps:
         model = CostModel(half_spread_bps=bps, commission_bps=0.0)
@@ -99,8 +93,8 @@ def cost_sensitivity(
 def breakeven_cost_bps(sens: pl.DataFrame) -> float:
     """Linear interpolation of the cost level at which net Sharpe hits zero.
 
-    NaN if the strategy never breaks even inside the grid -- which is itself the
-    answer, and a better one than an extrapolated number.
+    Returns NaN if the strategy does not cross zero inside the tested grid,
+    rather than extrapolating beyond it.
     """
     x = sens["all_in_bps"].to_numpy()
     y = sens["sharpe_net"].to_numpy()
@@ -115,8 +109,7 @@ def _direct_labels(ax, items, min_gap_px: float = 13.0) -> None:
     """Right-edge series labels, pushed apart so they never overprint.
 
     Labels are placed at each series' final value, then nudged vertically in
-    display space until adjacent labels clear each other. Cheap, and it removes
-    the most common reason people fall back on a legend-only chart.
+    display space until adjacent labels clear each other.
     """
     if not items:
         return
@@ -143,8 +136,8 @@ def plot_equity_and_drawdown(
 ) -> Path:
     """Two stacked panels: log equity on top, underwater plot beneath.
 
-    Log scale on equity because a linear axis makes a 10-year compounding curve
-    look like all the risk happened at the end.
+    Equity uses a log scale so that proportional moves are comparable across
+    the sample rather than dominated by the later years.
     """
     import matplotlib
 
@@ -182,9 +175,7 @@ def plot_equity_and_drawdown(
     ax1.set_title(title, color=INK, fontsize=12, loc="left", pad=12)
     _style(ax1)
 
-    # Direct labels at the right edge -- identity without reading the legend.
-    # Net and gross end close together by construction, so nudge them apart
-    # rather than letting the two labels overprint.
+    # Net and gross end close together, so offset the labels to avoid overlap.
     span = ax1.transData.transform((0, max(net[-1], gross[-1])))[1] - ax1.transData.transform(
         (0, min(net[-1], gross[-1]))
     )[1]
@@ -205,8 +196,7 @@ def plot_equity_and_drawdown(
     ax2.yaxis.set_major_formatter(lambda v, _: f"{v:.0%}")
     _style(ax2)
 
-    # Label the trough, flipping the label inward when it lands near the edge
-    # so it never runs off the canvas.
+    # Label the trough, flipping inward near the right edge to avoid clipping.
     worst = int(np.argmin(dd))
     late = worst > 0.75 * len(dd)
     ax2.annotate(
@@ -228,7 +218,7 @@ def plot_cost_sensitivity(
     path: str | Path,
     title: str = "Net Sharpe vs transaction cost",
 ) -> Path:
-    """One line per strategy, capped at three so the palette stays separable."""
+    """Net Sharpe against cost, one line per strategy. Capped at three."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -252,8 +242,7 @@ def plot_cost_sensitivity(
     ax.set_ylabel("Net Sharpe", color=INK_2, fontsize=9)
     ax.set_title(title, color=INK, fontsize=12, loc="left", pad=12)
     _style(ax)
-    # Legend below the plot in one row: direct labels already sit at the right
-    # edge, and a boxed legend inside the axes would collide with them.
+    # Legend below the axes, since direct labels occupy the right edge.
     leg = ax.legend(frameon=False, fontsize=9, ncol=3,
                     loc="upper center", bbox_to_anchor=(0.5, -0.16))
     for t in leg.get_texts():
@@ -273,8 +262,7 @@ def plot_lag_sensitivity(
     path: str | Path,
     title: str = "Sharpe decay with execution latency",
 ) -> Path:
-    """The leak detector, drawn. A cliff between 0 and 1 bars is the signature
-    of a signal that was reading its own fill price."""
+    """Sharpe against added execution delay, per strategy."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -297,8 +285,7 @@ def plot_lag_sensitivity(
     ax.set_ylabel("Net Sharpe", color=INK_2, fontsize=9)
     ax.set_title(title, color=INK, fontsize=12, loc="left", pad=12)
     _style(ax)
-    # Legend below the plot in one row: direct labels already sit at the right
-    # edge, and a boxed legend inside the axes would collide with them.
+    # Legend below the axes, since direct labels occupy the right edge.
     leg = ax.legend(frameon=False, fontsize=9, ncol=3,
                     loc="upper center", bbox_to_anchor=(0.5, -0.16))
     for t in leg.get_texts():
@@ -314,7 +301,7 @@ def plot_lag_sensitivity(
 
 
 def markdown_table(df: pl.DataFrame, floatfmt: str = "{:.3f}") -> str:
-    """Polars -> GitHub-flavoured markdown, so the README can embed results."""
+    """Render a Polars frame as a GitHub-flavoured markdown table."""
     cols = df.columns
     head = "| " + " | ".join(cols) + " |"
     sep = "| " + " | ".join("---" for _ in cols) + " |"

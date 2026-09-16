@@ -1,12 +1,11 @@
-"""A signal backtesting harness built to be paranoid about look-ahead bias.
+"""Daily-bar backtesting harness for evaluating trading signals.
 
-The pipeline is deliberately split into modules with hard boundaries:
+The pipeline is split into modules with fixed boundaries:
 
     data -> features -> signal -> target positions -> fills -> PnL -> metrics
 
-The boundary between `signal` and `engine` is the important one: a signal
-returns a *target position*, never a trade, and it never sees a price it could
-not have seen at decision time.
+A signal returns a target position and never a trade, so position sizing,
+execution lag and transaction costs stay in the engine.
 """
 
 from backtester.engine import BacktestResult, run_backtest

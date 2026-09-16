@@ -1,12 +1,8 @@
-"""positions -> fills -> PnL. This is where the one rule lives.
+"""Position-to-PnL engine.
 
-    A decision made using information from bar t can only be executed at t+1.
-
-That rule is enforced *here*, not in user code, because a rule enforced in user
-code is a rule that gets forgotten in the third notebook. The engine shifts the
-signal's output forward before it ever touches a return, so a signal author
-cannot opt out of the latency, cannot accidentally omit it, and cannot tune it
-to make a result look better.
+A position decided from bar ``t`` data is executed at bar ``t+1``. The shift is
+applied here, before positions are multiplied by returns, so signal code cannot
+change or omit it.
 
 Timeline for the default ``execution="next_open"``:
 
@@ -14,15 +10,13 @@ Timeline for the default ``execution="next_open"``:
     open  of bar t     the engine fills that target
     open  of bar t+1   the position is marked out; ret_t = open_{t+1}/open_t - 1
 
-So ``held_t = raw_{t-1}`` -- exactly one bar of latency, and the fill price is
-never a price the signal looked at.
+So ``held_t = raw_{t-1}``: one bar of latency, and the fill price is not a price
+the signal observed.
 
-For ``execution="close_to_close"`` the return earned during bar t is
-``close_t/close_{t-1} - 1``, which requires the fill to have happened at
-``close_{t-1}``. A decision taken at that same close and filled at that same
-close is the classic fantasy fill, so this mode carries TWO bars of latency
-(``held_t = raw_{t-2}``): decide at close t-2, fill at close t-1. It is more
-conservative than the industry default, on purpose.
+``execution="close_to_close"`` earns ``close_t/close_{t-1} - 1`` during bar t,
+which requires a fill at ``close_{t-1}``. Since a decision taken at that close
+cannot also be filled at it, this mode carries two bars of latency
+(``held_t = raw_{t-2}``).
 """
 
 from __future__ import annotations
@@ -40,14 +34,13 @@ from backtester.signal import PositionError, validate_positions
 
 ExecutionRule = Literal["next_open", "close_to_close"]
 
-#: Bars of latency each execution rule imposes. Not user-configurable; the
-#: ``extra_lag`` argument can only ADD to it.
+#: Bars of latency each execution rule imposes. ``extra_lag`` adds to this.
 BASE_LAG: dict[str, int] = {"next_open": 1, "close_to_close": 2}
 
 
 @dataclass
 class BacktestResult:
-    """Everything a run produced, plus enough provenance to reproduce it."""
+    """Output of a single backtest run, with the config used to produce it."""
 
     panel: pl.DataFrame          # per (date, ticker) detail
     portfolio: pl.DataFrame      # per date, aggregated
@@ -72,11 +65,10 @@ class BacktestResult:
 
 
 def _positions_rowwise(signal: Any, frame: pl.DataFrame) -> np.ndarray:
-    """Call ``predict`` once per bar, handing over only rows 0..t.
+    """Call ``predict`` once per bar, passing only rows 0..t.
 
-    Slicing a Polars DataFrame is a zero-copy view, so this is O(n) frames, not
-    O(n^2) bytes. It is still one Python call per bar, which is the price of an
-    interface where look-ahead cannot be written down.
+    Polars slices are zero-copy views, so memory is O(n) rather than O(n^2).
+    Runtime is one Python call per bar.
     """
     n = frame.height
     out = np.empty(n, dtype=float)
@@ -127,16 +119,14 @@ def run_backtest(
     Parameters
     ----------
     extra_lag:
-        Additional bars of delay on top of the mandatory execution lag. Use it
-        to answer "how fast does this decay?" -- a signal whose Sharpe halves
-        with one extra day of latency is not a signal you can trade.
+        Additional bars of delay on top of the execution lag, used to measure
+        how quickly a signal's Sharpe decays with latency.
     audit:
         Whether to run the future-perturbation audit on a vectorised signal.
-        Turning it off is allowed and is recorded in ``result.config`` so the
-        report can say so out loud.
+        The choice is recorded in ``result.config["audited"]``.
     """
     if extra_lag < 0:
-        raise ValueError("extra_lag must be >= 0; negative latency is time travel")
+        raise ValueError("extra_lag must be >= 0")
     costs = costs if costs is not None else CostModel()
 
     data_mod.validate_bars(bars)
@@ -155,11 +145,10 @@ def run_backtest(
     dollar_volume = pl.col("close") * pl.col("volume")
 
     panel = panel.with_columns(
-        # ---- THE RULE. One line, and it is the whole point of the module. ----
+        # Execution lag: a position decided from bar t is held from bar t+1.
         pl.col("raw_position").shift(lag).over("ticker").fill_null(0.0).alias("position")
     ).with_columns(
-        # An untradable bar (no price, no return) carries the position and
-        # accrues nothing -- it does not silently become a flat, costless day.
+        # An untradable bar accrues no return; the position is carried.
         pl.when(pl.col("ret").is_null())
         .then(pl.lit(0.0))
         .otherwise(pl.col("ret"))
@@ -176,9 +165,9 @@ def run_backtest(
         (pl.col("gross_ret") - pl.col("cost")).alias("net_ret")
     )
 
-    # Equal-weight across names, so the portfolio's gross exposure stays <= 1
-    # regardless of how many tickers are in the panel. Any other weighting is a
-    # portfolio-construction decision and does not belong in the engine.
+    # Equal weight across names, keeping gross exposure <= 1 regardless of
+    # panel size. Other weighting schemes are portfolio construction, not
+    # execution, and are out of scope for the engine.
     n = max(len(tickers), 1)
     portfolio = (
         panel.group_by("date")

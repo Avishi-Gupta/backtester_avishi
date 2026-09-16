@@ -3,33 +3,29 @@
 POINT-IN-TIME POLICY (this is a decision, not a default; it is written down
 because an unwritten alignment policy is where leakage hides):
 
-1.  A bar is stamped with the date on which it *closed*. Everything in row
+1.  A bar is stamped with the date on which it closed. Everything in row
     ``t`` was observable by the close of day ``t``.
 
-2.  Missing bars mean "the market was not open for this instrument". We do NOT
-    forward-fill prices across missing days by default. Forward filling turns a
-    halted or delisted name into a flat, tradable, zero-risk asset, which
-    flatters every backtest that touches it.
+2.  A missing bar means the instrument did not trade. Prices are not forward
+    filled by default: doing so turns a halted or delisted name into a flat,
+    tradable, zero-risk asset.
 
-3.  When several tickers are aligned onto a common calendar, the calendar is
-    the *union* of observed dates. A ticker with no bar on a calendar date gets
-    nulls, and the engine treats a null bar as untradable: the previous
-    position is carried, no return is accrued, no cost is charged. If you
-    prefer a different convention, pass ``missing="ffill"`` and accept that you
-    are asserting the price did not move.
+3.  Aligning several tickers uses the union of observed dates. A ticker with
+    no bar on a calendar date gets nulls, and the engine treats a null bar as
+    untradable: the previous position is carried, no return accrues and no cost
+    is charged. ``missing="ffill"`` selects the alternative convention, which
+    asserts the price did not move.
 
-4.  If ``missing="ffill"`` is used, the fill is a *backward-looking* fill
-    (``strategy="forward"``), which can only ever copy a past value into the
-    present. A backward fill (copying the future into the past) is never
-    permitted anywhere in this codebase.
+4.  ``missing="ffill"`` uses ``forward_fill``, which copies a past value into
+    the present. Backward fill, which would copy a future value into the past,
+    is not used anywhere in this package.
 
-5.  ADJUSTED PRICES ARE NOT POINT-IN-TIME. yfinance returns split- and
-    dividend-adjusted history, and that history is *restated* every time a new
-    corporate action occurs. The 2015 adjusted close you download today is not
-    the number anyone could have traded on in 2015. We therefore trade on
-    RAW OHLC (``auto_adjust=False``) and carry ``adj_close`` alongside only for
-    computing total returns. Splits are the one restatement we cannot ignore,
-    so ``split_ratio`` is carried too. See the README for the full argument.
+5.  Adjusted prices are not point-in-time. yfinance returns split- and
+    dividend-adjusted history, and that history is restated whenever a new
+    corporate action occurs, so an adjusted close downloaded today for 2015
+    differs from the figure available in 2015. The harness therefore trades raw
+    OHLC (``auto_adjust=False``) and carries ``adj_close`` separately for
+    total-return calculations.
 """
 
 from __future__ import annotations
@@ -69,10 +65,10 @@ class DataError(ValueError):
 def scan_parquet(path: str | Path) -> pl.LazyFrame:
     """Lazily scan a cached parquet panel.
 
-    Returns a LazyFrame, not a DataFrame. Nothing is read from disk until
-    ``.collect()``; Polars pushes the projections and filters that downstream
-    code adds down into the parquet reader, so a 20-year panel where you only
-    want three columns and two years never fully materialises.
+    Returns a LazyFrame. Nothing is read until ``.collect()``, and Polars
+    pushes downstream projections and filters into the parquet reader, so a
+    query over a subset of columns or dates does not materialise the full
+    panel.
     """
     return pl.scan_parquet(path)
 
@@ -85,13 +81,11 @@ def fetch_yfinance(
 ) -> pl.DataFrame:
     """Download daily bars and normalise them into the canonical long panel.
 
-    Deliberately kept thin: it downloads, reshapes wide-to-long, and writes a
-    parquet cache. Every other module reads the cache, so a backtest never
-    depends on the network and results are reproducible.
+    Downloads, reshapes wide to long, and writes a parquet cache. Other modules
+    read the cache, so backtests do not depend on the network.
 
-    Note ``auto_adjust=False``: we want the raw OHLC that was actually printed,
-    plus the adjusted close as a separate column. See the point-in-time policy
-    at the top of this file.
+    ``auto_adjust=False`` keeps the raw printed OHLC and returns the adjusted
+    close as a separate column. See the point-in-time policy above.
     """
     import yfinance as yf  # imported lazily: the rest of the package is offline
 
@@ -162,11 +156,10 @@ def synthetic_panel(
     annual_drift: float = 0.06,
     annual_vol: float = 0.22,
 ) -> pl.DataFrame:
-    """Deterministic fake bars with fat tails, vol clustering and a crash.
+    """Deterministic synthetic bars with volatility clustering and a drawdown.
 
-    This exists so that the whole harness — tests, walk-forward, report — runs
-    with no network and gives byte-identical results on every machine. It is
-    NOT a substitute for real data in the writeup; it is a fixture.
+    Used so that tests and reports run without network access and reproduce
+    exactly across machines. It is a fixture, not a substitute for real data.
     """
     import numpy as np
 
@@ -176,7 +169,7 @@ def synthetic_panel(
 
     for i, ticker in enumerate(tickers):
         r = rng.standard_normal(n_days)
-        # GARCH-ish vol clustering so drawdowns and regimes actually appear.
+        # GARCH-style volatility clustering, to produce regimes and drawdowns.
         vol = np.empty(n_days)
         vol[0] = annual_vol / np.sqrt(252)
         for t in range(1, n_days):
@@ -186,10 +179,10 @@ def synthetic_panel(
                 + 0.08 * (vol[t - 1] * r[t - 1]) ** 2
             )
         ret = annual_drift / 252 + vol * r
-        # A GFC-shaped drawdown three years in, common to every name.
+        # A sustained drawdown partway through, common to every name.
         crash = slice(int(n_days * 0.28), int(n_days * 0.36))
         ret[crash] -= 0.004
-        # A little cross-sectional common factor plus idiosyncratic noise.
+        # Small cross-sectional drift differences between names.
         ret = ret + 0.0002 * i
 
         close = 100.0 * np.exp(np.cumsum(ret))
@@ -244,11 +237,10 @@ def align(
 ) -> pl.DataFrame:
     """Put every ticker on the union calendar.
 
-    ``missing="null"``  -> absent bars stay null and the engine treats them as
-                           untradable (policy 3 above).
-    ``missing="ffill"`` -> prices are carried forward, volume set to 0. This is
-                           a forward fill only. There is no code path in this
-                           package that fills backwards.
+    ``missing="null"``  absent bars stay null and are treated as untradable
+                        (policy 3 above).
+    ``missing="ffill"`` prices are carried forward and volume set to 0. Forward
+                        fill only; no code path here fills backwards.
     """
     lf = bars.lazy()
     calendar = lf.select("date").unique()
@@ -273,7 +265,7 @@ def align(
 
 
 def validate_bars(bars: pl.DataFrame) -> None:
-    """Fail loudly on the input problems that silently corrupt a backtest."""
+    """Raise on input problems that would otherwise corrupt a backtest."""
     missing = [c for c in REQUIRED_COLUMNS if c not in bars.columns]
     if missing:
         raise DataError(f"bars are missing required columns: {missing}")
@@ -326,9 +318,9 @@ def to_returns(
         have been made before that close, so the engine adds an extra bar of
         latency in this mode. See engine.run_backtest.
 
-    Note the shift(-1) in ``next_open``. It looks like look-ahead and is not:
-    it is the *realisation* of a position, not information fed into a decision.
-    The distinction is the whole game, so it is asserted in the tests.
+    The ``shift(-1)`` in ``next_open`` is not look-ahead: it is the realised
+    outcome of a position, not an input to the decision that set it. The tests
+    assert this distinction.
     """
     if execution == "next_open":
         expr = (pl.col("open").shift(-1) / pl.col("open") - 1.0).over("ticker")
@@ -343,7 +335,7 @@ def load(
     source: str | Path | pl.DataFrame,
     missing: Literal["null", "ffill"] = "null",
 ) -> pl.DataFrame:
-    """Convenience front door: parquet path or in-memory frame -> validated panel."""
+    """Load a parquet path or in-memory frame into a validated, aligned panel."""
     if isinstance(source, pl.DataFrame):
         bars = source
     else:

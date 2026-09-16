@@ -6,7 +6,7 @@ from backtester import data
 
 @pytest.fixture(scope="session")
 def bars() -> pl.DataFrame:
-    """Deterministic synthetic panel. Same on every machine, no network."""
+    """Deterministic synthetic panel; identical across machines, no network."""
     return data.synthetic_panel(n_days=1500, seed=7)
 
 

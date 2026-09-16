@@ -1,20 +1,14 @@
 """Feature computation in Polars.
 
-Every function here returns a Polars *expression*, not a DataFrame. Two reasons:
+Functions here return Polars expressions rather than DataFrames, so they compose
+into a single query and so causality is visible in the expression itself.
 
-1.  Expressions compose. ``momentum(20) / realised_vol(20)`` is a single fused
-    query the engine optimises once, instead of three intermediate frames.
+A feature is causal when its value at row ``t`` depends only on rows ``<= t``:
+rolling windows, ``shift(k)`` for ``k > 0``, and cumulative aggregates. Whole-
+column aggregates such as ``mean()`` or ``max()`` used as scalars are not
+causal, since they read the entire history.
 
-2.  Expressions are the unit at which causality can be checked. A feature is
-    causal if its value at row ``t`` depends only on rows ``<= t``. In Polars
-    that means: rolling windows (which look backwards), ``shift(k)`` with
-    ``k > 0``, and cumulative aggregates. It emphatically does NOT include
-    ``shift(-1)``, ``reverse()``, or any whole-column aggregate such as
-    ``mean()`` / ``std()`` / ``max()`` used as a scalar, because a full-column
-    mean is computed from the entire history including the future.
-
-``FORBIDDEN_EXPRS`` and :func:`assert_causal` make that check mechanical rather
-than a matter of the author remembering.
+:func:`assert_causal` checks this empirically rather than by inspection.
 """
 
 from __future__ import annotations
@@ -25,7 +19,7 @@ import polars as pl
 
 TRADING_DAYS = 252
 
-# Anything that can see forward in a column. Used by assert_causal.
+# Expressions that can read later rows in a column.
 FORBIDDEN_METHODS = (
     "shift(-",
     "backward_fill",
@@ -40,7 +34,7 @@ FORBIDDEN_METHODS = (
 
 
 def log_return(col: str = "close", by: str = "ticker") -> pl.Expr:
-    """One-bar log return. Uses shift(1): strictly backward-looking."""
+    """One-bar log return."""
     return (pl.col(col) / pl.col(col).shift(1)).log().over(by).alias("log_ret")
 
 
@@ -58,8 +52,8 @@ def rolling_std(window: int, col: str = "close", by: str = "ticker") -> pl.Expr:
 
 
 def zscore(window: int, col: str = "close", by: str = "ticker") -> pl.Expr:
-    """How many trailing standard deviations the current value sits from its
-    trailing mean. The classic mean-reversion feature."""
+    """Trailing standard deviations between the current value and its trailing
+    mean."""
     mu = pl.col(col).rolling_mean(window)
     sd = pl.col(col).rolling_std(window)
     return ((pl.col(col) - mu) / sd).over(by).alias(f"z_{window}")
@@ -77,10 +71,9 @@ def realised_vol(
 
 
 def lag(expr: pl.Expr, k: int = 1, by: str = "ticker") -> pl.Expr:
-    """Explicit extra latency. ``k`` must be positive; negative lags are a bug,
-    not a feature, so they raise rather than silently peeking."""
+    """Explicit extra latency. Negative ``k`` raises."""
     if k < 0:
-        raise ValueError("negative lag would read the future; use k >= 0")
+        raise ValueError("negative lag reads future rows; use k >= 0")
     return expr.shift(k).over(by)
 
 
@@ -94,10 +87,10 @@ def standard_features(
     windows: tuple[int, ...] = (5, 20, 60, 120),
     collect: bool = True,
 ) -> pl.DataFrame | pl.LazyFrame:
-    """The feature set the example signals use.
+    """The feature set used by the example signals.
 
-    Built lazily and collected once: Polars sees the whole plan, dedupes the
-    repeated rolling computations over ``close``, and executes in one pass.
+    Built lazily and collected once, so the repeated rolling computations over
+    ``close`` are deduplicated and executed in a single pass.
     """
     lf = bars.lazy().sort(["ticker", "date"])
     exprs: list[pl.Expr] = [log_return()]
@@ -124,15 +117,14 @@ def assert_causal(
     seed: int = 0,
     rtol: float = 1e-9,
 ) -> None:
-    """Prove a feature builder cannot see the future, empirically.
+    """Check a feature builder against future perturbation.
 
-    The method: take the panel, pick a cut point, scramble every bar *after*
-    the cut, rebuild the features, and compare the rows *before* the cut. If a
-    single value moved, some feature reached forward in time.
+    Takes the panel, picks a cut point, perturbs every bar after the cut,
+    rebuilds the features and compares the rows before the cut. Any change
+    means a feature read data from after the cut.
 
-    This catches things a code review misses -- a stray ``.mean()`` over a
-    whole column, an off-by-one in a ``shift``, a merge that accidentally
-    joined on the wrong side.
+    Detects whole-column aggregates, off-by-one errors in ``shift``, and joins
+    made on the wrong side.
     """
     import numpy as np
 

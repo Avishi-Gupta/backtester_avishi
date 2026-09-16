@@ -1,12 +1,8 @@
-"""The yfinance loader, tested without a network.
+"""Tests for the yfinance loader, using a stub rather than the network.
 
-yfinance returns two different shapes depending on how many tickers you ask
-for: a (field, ticker) column MultiIndex for several, and flat columns for one.
-The single-ticker case is the one that breaks in production, because everybody
-develops against a list and then runs a one-name sanity check.
-
-Both shapes are exercised here against a stub, so `fetch_yfinance` is covered
-offline and the test suite stays deterministic.
+yfinance returns a (field, ticker) column MultiIndex for several tickers and
+flat columns for one. Both shapes are covered here, along with validation, the
+empty-download case and the parquet cache roundtrip.
 """
 
 import sys
@@ -73,7 +69,7 @@ def test_multi_ticker_download_becomes_a_long_panel(stub_yfinance):
     assert df.height == 10
     assert sorted(df["ticker"].unique().to_list()) == ["AAPL", "MSFT"]
     assert df["date"].dtype == pl.Date
-    # Sorted by (ticker, date), which the engine's .over("ticker") relies on.
+    # Sorted by (ticker, date), which the engine's .over("ticker") requires.
     assert df["ticker"].to_list() == ["AAPL"] * 5 + ["MSFT"] * 5
     assert df.filter(pl.col("ticker") == "MSFT")["date"].is_sorted()
     row = df.filter((pl.col("ticker") == "MSFT")).head(1)
@@ -82,8 +78,8 @@ def test_multi_ticker_download_becomes_a_long_panel(stub_yfinance):
 
 
 def test_single_ticker_flat_columns_are_handled(stub_yfinance):
-    """The shape that silently differs. Without the MultiIndex fix-up this
-    raises a KeyError deep inside the rename."""
+    """Without the MultiIndex normalisation this raises a KeyError in the
+    column rename."""
     stub_yfinance(lambda tks: _flat_frame())
     df = data.fetch_yfinance(["AAPL"], start="2024-01-01")
 
@@ -93,7 +89,7 @@ def test_single_ticker_flat_columns_are_handled(stub_yfinance):
 
 
 def test_downloaded_bars_are_validated(stub_yfinance):
-    """A bad download must fail at the door, not 200 lines later in the engine."""
+    """An invalid download should fail during load, not later in the engine."""
 
     def broken(tks):
         f = _multi_frame(tks)
@@ -112,8 +108,8 @@ def test_empty_download_raises_rather_than_returning_nothing(stub_yfinance):
 
 
 def test_cache_roundtrips_through_parquet(stub_yfinance, tmp_path):
-    """The cache is what every downstream script reads, so prove the roundtrip
-    preserves the schema exactly."""
+    """Downstream scripts read the cache, so check the roundtrip preserves the
+    schema."""
     stub_yfinance(lambda tks: _multi_frame(tks))
     cache = tmp_path / "bars.parquet"
     written = data.fetch_yfinance(["AAPL", "MSFT"], start="2024-01-01", cache=cache)
@@ -123,6 +119,6 @@ def test_cache_roundtrips_through_parquet(stub_yfinance, tmp_path):
     assert reloaded.schema == written.schema
     assert reloaded.equals(written)
 
-    # And the full front door works on it, alignment included.
+    # data.load also works on the cache, including alignment.
     panel = data.load(cache)
     assert panel.height == written.height

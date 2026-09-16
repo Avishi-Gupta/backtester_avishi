@@ -1,8 +1,7 @@
-"""Example signals -- three honest ones, three deliberately broken ones.
+"""Example signals.
 
-The broken ones are not filler. They are the fixtures that make the test suite
-mean something: a harness that has never been shown a leaking signal has never
-demonstrated that it can catch one.
+Four work correctly. Three are deliberately broken and are used as fixtures for
+the leak-detection tests.
 """
 
 from __future__ import annotations
@@ -14,19 +13,19 @@ from backtester import features as F
 from backtester.signal import BaseSignal
 
 # ---------------------------------------------------------------------------
-# Honest signals
+# Working signals
 # ---------------------------------------------------------------------------
 
 
 class BuyAndHold(BaseSignal):
-    """Always fully long. The benchmark every result must be compared against."""
+    """Always fully long. Benchmark for the other signals."""
 
     def predict_all(self, frame: pl.DataFrame) -> pl.Series:
         return pl.Series("position", np.ones(frame.height))
 
 
 class ZeroSignal(BaseSignal):
-    """Always flat. Must produce exactly zero turnover and zero cost."""
+    """Always flat. Produces zero turnover and zero cost."""
 
     def predict_all(self, frame: pl.DataFrame) -> pl.Series:
         return pl.Series("position", np.zeros(frame.height))
@@ -35,9 +34,8 @@ class ZeroSignal(BaseSignal):
 class Momentum(BaseSignal):
     """Long if the trailing ``lookback``-bar return is positive, short if not.
 
-    ``smooth`` turns the hard sign into a tanh of the trailing Sharpe of the
-    move, which cuts turnover a lot for very little Sharpe -- the sort of
-    trade-off the turnover column exists to make visible.
+    ``smooth`` replaces the hard sign with a tanh of the move's trailing
+    Sharpe, which lowers turnover at a small cost in Sharpe.
     """
 
     def __init__(self, lookback: int = 60, smooth: bool = True, scale: float = 3.0):
@@ -87,10 +85,8 @@ class MeanReversion(BaseSignal):
 class VolFilteredMomentum(Momentum):
     """Momentum, switched off when trailing volatility is in its own top decile.
 
-    Uses an EXPANDING quantile, not a full-sample one. That distinction is the
-    whole difference between this class and :class:`PeekingVolFilter` below, and
-    it is exactly the kind of one-line change that a code review waves through
-    and the future-perturbation audit does not.
+    The threshold is an expanding quantile, not a full-sample one. That is the
+    only difference between this class and :class:`PeekingVolFilter` below.
     """
 
     def __init__(self, lookback: int = 60, vol_window: int = 20, quantile: float = 0.9, **kw):
@@ -109,21 +105,20 @@ class VolFilteredMomentum(Momentum):
 
 
 # ---------------------------------------------------------------------------
-# Deliberately broken signals -- fixtures for the tests
+# Deliberately broken signals: fixtures for the leak-detection tests
 # ---------------------------------------------------------------------------
 
 
 class Oracle(BaseSignal):
-    """Knows the sign of the return it is about to earn. Cheats blatantly.
+    """Positioned on the sign of the return it is about to earn.
 
     Under the engine's default rule, ``held_t = raw_{t-1}`` and the return
     earned during bar ``t`` is ``open_{t+1}/open_t - 1``. To be perfectly
     positioned we therefore need ``raw_t = sign(open_{t+2} - open_{t+1})``.
 
-    Purpose: the perfect-foresight test. If the engine's plumbing is correct,
-    this must produce an enormous Sharpe. If it does not, the engine has a bug,
-    and every honest result it produces is also wrong. Run it with
-    ``audit=False``, because the auditor's entire job is to refuse it.
+    Used by the perfect-foresight test: a correctly aligned engine gives this
+    a very high Sharpe, and a lower figure indicates a bar misalignment. Run
+    with ``audit=False``, since the audit is designed to reject it.
     """
 
     def predict_all(self, frame: pl.DataFrame) -> pl.Series:
@@ -138,9 +133,8 @@ class Oracle(BaseSignal):
 class PeekAheadMomentum(Momentum):
     """Momentum computed with a window that includes tomorrow's close.
 
-    The classic off-by-one: someone writes ``shift(-1)`` meaning "next row's
-    feature" and gets the next row's *price*. Free money, and it looks like a
-    normal momentum strategy in a diff.
+    An off-by-one error: ``shift(-1)`` intended to mean "next row's feature"
+    returns the next row's price instead.
     """
 
     def predict_all(self, frame: pl.DataFrame) -> pl.Series:
@@ -153,11 +147,9 @@ class PeekAheadMomentum(Momentum):
 class PeekingVolFilter(VolFilteredMomentum):
     """Momentum gated by a FULL-SAMPLE volatility quantile.
 
-    Subtler and far more common than an off-by-one. Nothing here is shifted
-    backwards; the leak is that the threshold was computed once, from the whole
-    history, so in 2007 the strategy already knows how violent 2008 will be and
-    calibrates "high volatility" accordingly. This is the strategy equivalent
-    of fitting a scaler before the train/test split.
+    Nothing is shifted backwards here. The threshold is computed once over the
+    entire history, so the definition of "high volatility" in 2007 already
+    reflects 2008. Equivalent to fitting a scaler before a train/test split.
     """
 
     def predict_all(self, frame: pl.DataFrame) -> pl.Series:
@@ -165,13 +157,13 @@ class PeekingVolFilter(VolFilteredMomentum):
         close = frame["close"].to_numpy()
         lr = np.diff(np.log(close), prepend=np.log(close[0]))
         vol = _rolling_std(lr, self.vol_window)
-        thresh = np.nanquantile(vol, self.quantile)  # <-- the leak, in one call
+        thresh = np.nanquantile(vol, self.quantile)  # full-sample: the leak
         gate = (vol <= thresh).astype(float)
         return pl.Series("position", base * np.nan_to_num(gate))
 
 
 # ---------------------------------------------------------------------------
-# Small numpy helpers (kept local so the signals stay readable)
+# numpy helpers
 # ---------------------------------------------------------------------------
 
 
@@ -186,10 +178,9 @@ def _rolling_std(x: np.ndarray, w: int) -> np.ndarray:
 
 
 def _expanding_quantile(x: np.ndarray, q: float, min_periods: int = 250) -> np.ndarray:
-    """Quantile of everything seen SO FAR, at each point in time.
+    """Quantile of the values seen up to each point in time.
 
-    O(n log n) via an incrementally sorted list; the naive version is O(n^2)
-    and turns a 20-year backtest into a coffee break.
+    O(n log n) via an incrementally sorted list; the naive version is O(n^2).
     """
     import bisect
 

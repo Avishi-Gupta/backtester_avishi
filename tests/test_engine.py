@@ -1,4 +1,4 @@
-"""Zero signal, cost monotonicity, and the hand-computed known answer."""
+"""Engine tests: zero signal, cost monotonicity, known answer, data guards."""
 
 import datetime as dt
 
@@ -27,7 +27,7 @@ def test_zero_signal_has_zero_turnover_and_zero_cost(bars):
 
 
 def test_constant_nonzero_position_trades_once(bars):
-    """Buy-and-hold pays the spread exactly once, on the way in."""
+    """A constant long position pays the spread once, on entry."""
     res = run_backtest(bars, signals.BuyAndHold(), costs=CostModel(half_spread_bps=10))
     assert res.metrics.n_trades == 1
     total_cost = res.portfolio["cost"].sum()
@@ -74,8 +74,8 @@ def test_known_answer_five_bars(five_bars):
     so held = [0, 1, 1, 1, 1] and gross PnL per bar is
         [0*0.10, 1*0.10, 1*0.00, 1*(-0.10), 1*0] = [0, 0.10, 0, -0.10, 0]
 
-    Equity = 1 * 1.10 * 1.00 * 0.90 * 1.00 = 0.99. Losing money on a round
-    trip that ends where it started is correct: compounding is not additive.
+    Equity = 1 * 1.10 * 1.00 * 0.90 * 1.00 = 0.99. The round trip ends at the
+    starting price but below the starting equity, since returns compound.
     """
     res = run_backtest(five_bars, signals.BuyAndHold(), costs=FRICTIONLESS)
 
@@ -93,8 +93,8 @@ def test_known_answer_five_bars(five_bars):
 
 
 def test_known_answer_with_costs(five_bars):
-    """Same five bars, 10bp half-spread and 0 commission. One trade of size 1.0
-    on bar 1, so exactly 0.001 comes out of that bar's return."""
+    """Same five bars at 10bp half-spread, zero commission. One trade of size
+    1.0 on bar 1, costing 0.001 of that bar's return."""
     res = run_backtest(
         five_bars, signals.BuyAndHold(), costs=CostModel(half_spread_bps=10.0, commission_bps=0.0)
     )
@@ -124,7 +124,7 @@ def test_high_below_low_is_rejected(five_bars):
 
 
 def test_alignment_does_not_fill_from_the_future():
-    """A ticker missing its middle bar must not receive the NEXT bar's price."""
+    """A ticker missing its middle bar must not receive the next bar's price."""
     panel = pl.DataFrame(
         {
             "date": [dt.date(2020, 1, 1), dt.date(2020, 1, 2), dt.date(2020, 1, 3)] * 2,
@@ -141,7 +141,7 @@ def test_alignment_does_not_fill_from_the_future():
     holed = panel.filter(~((pl.col("ticker") == "B") & (pl.col("date") == dt.date(2020, 1, 2))))
     filled = align(holed, missing="ffill").sort(["ticker", "date"])
     b = filled.filter(pl.col("ticker") == "B")["close"].to_list()
-    assert b == [10.0, 10.0, 30.0], "forward fill must copy the PAST value, never the future"
+    assert b == [10.0, 10.0, 30.0], "forward fill must copy the previous value"
 
 
 def test_missing_bars_default_to_untradable():

@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Polars vs pandas on the same feature workload.
 
-Not a benchmark for its own sake. The point is to end up with an opinion you can
-defend: where the columnar/lazy engine actually helps, and where it does not.
-
 Three implementations of an identical feature set (momentum, SMA, z-score and
-realised vol at four windows, grouped by ticker):
+realised volatility at four windows, grouped by ticker):
 
   pandas         groupby().rolling(), the idiomatic version
   polars_eager   expression API, executed immediately
@@ -25,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def _require(module: str, extra: str = "") -> None:
-    """Fail with the command to run, not a bare ModuleNotFoundError."""
+    """Exit with the install command instead of a bare ModuleNotFoundError."""
     import importlib
 
     try:
@@ -34,13 +31,11 @@ def _require(module: str, extra: str = "") -> None:
         root = Path(__file__).resolve().parent.parent
         sys.exit(
             f"\nMissing dependency: {module}\n\n"
-            f"Install the project's requirements with the SAME interpreter that runs\n"
-            f"this script:\n\n"
+            f"Install with the same interpreter that runs this script:\n\n"
             f"    cd {root}\n"
             f"    python3 -m pip install -e .{extra}\n\n"
-            f"(Using `python3 -m pip` rather than a bare `pip` matters: a bare `pip`\n"
-            f"often belongs to a different environment than `python3`, which is how\n"
-            f"a package installs successfully and still imports as missing.)\n"
+            f"`python3 -m pip` is used rather than a bare `pip` because the two can\n"
+            f"resolve to different environments.\n"
         )
 
 
@@ -128,8 +123,7 @@ def main() -> None:
     for name, (med, sd) in results.items():
         print(f"{name:<24} {med:>12.4f} {sd:>8.4f} {base / med:>8.1f}x")
 
-    # Correctness: the fast one must agree with the slow one, or the timing is
-    # a comparison between a right answer and a wrong one.
+    # Check the implementations agree before comparing their timings.
     a = polars_eager_features(df).sort(["ticker", "date"])["z_20"].to_numpy()
     b = pandas_features(pdf).sort_values(["ticker", "date"])["z_20"].to_numpy()
     ok = np.allclose(np.nan_to_num(a), np.nan_to_num(b), atol=1e-9)

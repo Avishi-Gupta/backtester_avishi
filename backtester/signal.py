@@ -1,24 +1,18 @@
-"""The interface a user implements.
+"""Signal interfaces.
 
-There are two ways to write a signal, and the difference is the central design
-decision of this harness.
+Two interfaces are provided.
 
-**The safe interface** (:class:`Signal`) is row-wise. The engine hands you a
-frame containing rows ``0..t`` and nothing else. You physically cannot read
-tomorrow's close, because tomorrow's close is not in the object you were given.
-Look-ahead is not detected here; it is *unrepresentable*. The cost is speed:
-one Python call per bar.
+:class:`Signal` is row-wise. The engine passes a frame containing rows ``0..t``
+only, so later bars are not available to the signal. The cost is one Python
+call per bar.
 
-**The fast interface** (:class:`VectorSignal`) hands you the whole panel and
-asks for the whole position series at once, which is 100-1000x faster. That
-convenience buys back the ability to cheat, so the engine refuses to run a
-``VectorSignal`` until it has passed the future-perturbation audit in
-:mod:`backtester.leakguard`. Speed is available; unaudited speed is not.
+:class:`VectorSignal` receives the whole panel and returns all positions at
+once, which runs roughly 100-1000x faster. Because that interface can read
+future rows, the engine runs the future-perturbation audit in
+:mod:`backtester.leakguard` before using its output.
 
-Both return a **target position** in ``[-1, 1]``, never a trade. Sizing,
-netting, latency and costs belong to the engine, where the constraints live. A
-signal that could emit "BUY 100 shares" would be a signal that has opinions
-about execution, and those opinions would not be tested by anything.
+Both return a target position in ``[-1, 1]``, not a trade. Sizing, netting,
+execution lag and costs are handled by the engine.
 """
 
 from __future__ import annotations
@@ -34,30 +28,29 @@ class PositionError(ValueError):
 
 @runtime_checkable
 class Signal(Protocol):
-    """Row-wise signal. Cannot see the future by construction."""
+    """Row-wise signal. Receives rows 0..t only."""
 
     def fit(self, train: pl.DataFrame) -> None:
         """Optional calibration on a training slice.
 
-        Called by the walk-forward runner with the in-sample window only. If
-        your signal is stateless, implement this as ``pass``.
+        Called by the walk-forward runner with the in-sample window only.
+        Stateless signals can implement this as ``pass``.
         """
         ...
 
     def predict(self, history: pl.DataFrame) -> float:
-        """Target position in [-1, 1] for the bar that *follows* the last row.
+        """Target position in [-1, 1] for the bar following the last row.
 
         ``history`` contains rows up to and including the decision bar. The
-        engine then applies its own execution lag on top, so the position you
-        return here is filled at the next bar's open, not at the close you are
-        looking at.
+        engine applies the execution lag afterwards, so this position is filled
+        at the next bar's open.
         """
         ...
 
 
 @runtime_checkable
 class VectorSignal(Protocol):
-    """Vectorised signal. Fast, auditable, not trusted until audited."""
+    """Vectorised signal. Audited by the engine before its output is used."""
 
     def fit(self, train: pl.DataFrame) -> None: ...
 
@@ -65,13 +58,13 @@ class VectorSignal(Protocol):
         """Target positions for every row of ``frame``, same length, same order.
 
         Row ``t`` of the output must be computable from rows ``0..t`` of the
-        input. The engine verifies this claim rather than believing it.
+        input. The engine verifies this before using the result.
         """
         ...
 
 
 class BaseSignal:
-    """Small convenience base. Stateless ``fit``, and position hygiene."""
+    """Base class providing a no-op ``fit`` and position clipping."""
 
     #: Bars of history required before the signal produces a non-zero position.
     warmup: int = 0
@@ -81,8 +74,8 @@ class BaseSignal:
 
     @staticmethod
     def clip(x: float) -> float:
-        """Clamp to the legal range, and turn NaN into flat rather than into
-        a silent NaN that poisons the whole equity curve downstream."""
+        """Clamp to [-1, 1]. NaN becomes 0.0 rather than propagating into the
+        equity curve."""
         import math
 
         if x is None or (isinstance(x, float) and math.isnan(x)):
@@ -91,11 +84,10 @@ class BaseSignal:
 
 
 def validate_positions(pos: pl.Series) -> pl.Series:
-    """Reject illegal target positions loudly, at the boundary.
+    """Validate target positions at the engine boundary.
 
-    Nulls become 0.0 (flat) because a signal with insufficient warmup should be
-    out of the market, not undefined. Infinities and out-of-range values are
-    programmer errors and raise.
+    Nulls become 0.0, so a signal still in its warmup period is flat rather
+    than undefined. Infinite or out-of-range values raise.
     """
     filled = pos.fill_null(0.0).fill_nan(0.0)
     if filled.is_infinite().any():

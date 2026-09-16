@@ -1,4 +1,4 @@
-"""Metrics against closed-form answers, and walk-forward hygiene."""
+"""Metrics against closed-form values, and walk-forward behaviour."""
 
 import numpy as np
 import polars as pl
@@ -75,9 +75,8 @@ def test_walk_forward_segments_do_not_overlap(bars):
 
 
 def test_walk_forward_refits_a_fresh_signal_each_fold(bars):
-    """A signal instance reused across folds would carry fold-1 state into
-    fold 2. The factory contract is what prevents it, so assert the factory is
-    actually called once per fold."""
+    """A reused signal instance would carry state from one fold into the next,
+    so check the factory is called once per fold."""
     calls = {"n": 0}
 
     def factory():
