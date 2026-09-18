@@ -155,6 +155,32 @@ def main() -> None:
         ]
     report.plot_cost_sensitivity(sens, OUT / "cost_sensitivity.png")
 
+    # ---- 3b. Cost sensitivity, out-of-sample ------------------------------
+    lines += [
+        "### Break-even cost, out-of-sample",
+        "",
+        "The table above is full-sample. This one re-runs the whole walk-forward",
+        "at each cost level, so the break-even is an out-of-sample figure.",
+        "",
+    ]
+    oos_rows = []
+    for name in ("mean_reversion", "vol_filtered_momentum", "momentum"):
+        w = report.walkforward_cost_sensitivity(
+            bars, STRATEGIES[name], train_bars=args.train_bars, test_bars=args.test_bars
+        )
+        be = report.breakeven_cost_bps(w)
+        oos_rows.append(
+            {
+                "strategy": name,
+                "folds": int(w["n_folds"][0]),
+                "sharpe_0bp": w["sharpe_net"][0],
+                "sharpe_5bp": w.filter(pl.col("all_in_bps") == 5.0)["sharpe_net"][0],
+                "sharpe_10bp": w.filter(pl.col("all_in_bps") == 10.0)["sharpe_net"][0],
+                "breakeven_bps": be,
+            }
+        )
+    lines += [report.markdown_table(pl.DataFrame(oos_rows)), ""]
+
     # ---- 4. Latency sensitivity (the leak diagnostic) ----------------------
     lines += [
         "## Latency sensitivity",

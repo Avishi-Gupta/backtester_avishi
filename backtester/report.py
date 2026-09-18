@@ -90,6 +90,43 @@ def cost_sensitivity(
     return pl.DataFrame(rows)
 
 
+def walkforward_cost_sensitivity(
+    bars: pl.DataFrame,
+    signal_factory: Callable[[], Any],
+    all_in_bps: Sequence[float] = (0.0, 1.0, 2.0, 5.0, 10.0, 20.0),
+    train_bars: int = 750,
+    test_bars: int = 125,
+    **kwargs: Any,
+) -> pl.DataFrame:
+    """Cost sensitivity measured out-of-sample, one walk-forward run per cost level.
+
+    ``cost_sensitivity`` above runs on the full sample, which is cheaper but is
+    an in-sample figure. This version re-runs the walk-forward at each cost
+    level, so the break-even it feeds is an out-of-sample number.
+    """
+    from backtester.walkforward import walk_forward
+
+    rows = []
+    for bps in all_in_bps:
+        model = CostModel(half_spread_bps=bps, commission_bps=0.0)
+        wf = walk_forward(
+            bars, signal_factory, train_bars=train_bars, test_bars=test_bars,
+            costs=model, **kwargs,
+        )
+        m = wf.metrics
+        rows.append(
+            {
+                "all_in_bps": bps,
+                "sharpe_net": m.sharpe,
+                "cagr": m.cagr,
+                "max_drawdown": m.max_drawdown,
+                "turnover": m.turnover,
+                "n_folds": len(wf.folds),
+            }
+        )
+    return pl.DataFrame(rows)
+
+
 def breakeven_cost_bps(sens: pl.DataFrame) -> float:
     """Linear interpolation of the cost level at which net Sharpe hits zero.
 

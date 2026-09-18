@@ -110,6 +110,17 @@ Break-even all-in cost: **6.3 bps**
 
 Break-even all-in cost: **10.4 bps**
 
+### Break-even cost, out-of-sample
+
+The table above is full-sample. This one re-runs the whole walk-forward
+at each cost level, so the break-even is an out-of-sample figure.
+
+| strategy | folds | sharpe_0bp | sharpe_5bp | sharpe_10bp | breakeven_bps |
+| --- | --- | --- | --- | --- | --- |
+| mean_reversion | 37 | 0.308 | 0.103 | -0.102 | 7.511 |
+| vol_filtered_momentum | 37 | 0.274 | 0.155 | 0.036 | 11.517 |
+| momentum | 37 | -0.010 | -0.092 | -0.173 | n/a |
+
 ## Latency sensitivity
 
 Extra bars of delay ON TOP of the mandatory one. A signal whose Sharpe
